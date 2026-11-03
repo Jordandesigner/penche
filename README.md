@@ -4,6 +4,7 @@ Générateur de titres déformés en perspective, exportables en SVG vectoriel.
 
 - Inclinaison **horizontale** (grandit à droite ou à gauche, lentille, sablier) et **verticale**
 - Intensité, ancrage (haut, centre, bas), interlettrage réglables
+- **Plusieurs lignes** (Entrée, 5 maximum) : chaque ligne a sa forme, avec un effet miroir (bas droit + pic en haut, puis haut droit + pic en bas), interligne et option « même largeur »
 - 2 couleurs libres (texte et fond)
 - 86 polices Google Fonts intégrées, ou **ajoutez la vôtre** (.ttf, .otf, .woff) par glisser-déposer
 - Export SVG : de vrais tracés, sans police à embarquer

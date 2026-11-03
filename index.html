@@ -70,7 +70,7 @@
   }
   .sub { font-size: 13px; color: var(--muted); display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
   .sub output { font-family: var(--mono); font-size: 12px; color: var(--cream); }
-  input[type="text"], select {
+  input[type="text"], textarea, select {
     width: 100%; height: 54px; padding: 0 16px;
     background: var(--field); color: var(--cream);
     border: 1px solid var(--cream); border-radius: 0;
@@ -79,7 +79,8 @@
   select { appearance: none; cursor: pointer; padding-right: 40px;
     background-image: linear-gradient(45deg, transparent 50%, var(--cream) 50%), linear-gradient(135deg, var(--cream) 50%, transparent 50%);
     background-position: calc(100% - 22px) 24px, calc(100% - 16px) 24px; background-size: 6px 6px; background-repeat: no-repeat; }
-  input[type="text"]::placeholder { color: var(--muted); opacity: .8; }
+  textarea { height: auto; min-height: 96px; padding: 14px 16px; line-height: 1.35; resize: vertical; display: block; }
+  input[type="text"]::placeholder, textarea::placeholder { color: var(--muted); opacity: .8; }
   .inline { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
   .check { display: inline-flex; gap: 8px; align-items: center; font-size: 13.5px; color: var(--cream); cursor: pointer; }
   input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--red); margin: 0; cursor: pointer; }
@@ -161,7 +162,8 @@
 
     <div class="field">
       <label class="label" for="text">Saisir le texte</label>
-      <input type="text" id="text" value="Fuyant" maxlength="40" autocomplete="off" spellcheck="false" placeholder="Votre texte">
+      <textarea id="text" rows="2" maxlength="160" autocomplete="off" spellcheck="false" placeholder="Votre texte">Fuyant</textarea>
+      <span class="sub">Entrée ajoute une ligne (5 maximum), avec sa propre forme.</span>
       <div class="inline">
         <label class="check"><input type="checkbox" id="upper" checked> Majuscules</label>
         <label class="sub" for="spacing" style="flex:1;min-width:150px;gap:8px">Espacement <input type="range" id="spacing" min="-10" max="120" step="1" value="2" style="flex:1;width:auto"><output id="spacingOut"></output></label>
@@ -179,8 +181,17 @@
       </div>
     </div>
 
+    <fieldset class="field" id="linesField" hidden>
+      <legend class="label">Lignes</legend>
+      <label class="check"><input type="checkbox" id="mirror" checked> Effet miroir : la ligne 2 inverse la forme de la ligne 1</label>
+      <div class="grid g5" id="lineTabs" role="group" aria-label="Ligne à régler" hidden></div>
+      <label class="sub" for="gap">Interligne <output id="gapOut"></output></label>
+      <input type="range" id="gap" min="0" max="80" step="1" value="12">
+      <label class="check"><input type="checkbox" id="justify"> Même largeur pour toutes les lignes</label>
+    </fieldset>
+
     <fieldset class="field">
-      <legend class="label">Inclinaison horizontale</legend>
+      <legend class="label" id="hLegend">Inclinaison horizontale</legend>
       <div class="grid g5" id="hProfs" role="group" aria-label="Profil horizontal"></div>
       <div class="grid g3" id="hAnchors" role="group" aria-label="Ancrage"></div>
       <label class="sub" for="hAmt">Intensité <output id="hAmtOut"></output></label>
@@ -188,7 +199,7 @@
     </fieldset>
 
     <fieldset class="field">
-      <legend class="label">Inclinaison verticale</legend>
+      <legend class="label" id="vLegend">Inclinaison verticale</legend>
       <div class="grid g5" id="vProfs" role="group" aria-label="Profil vertical"></div>
       <label class="sub" for="vAmt">Intensité <output id="vAmtOut"></output></label>
       <input type="range" id="vAmt" min="0" max="80" step="1" value="30">
@@ -331,10 +342,38 @@
     }).join("");
   }
 
-  /* opt : { fg, bg (ou null), preview } */
-  function buildSVG(prep, S, opt) {
-    if (!prep.any) return null;
-    var wp = warp(prep, S), b = wp.box;
+  /* Empile les lignes déformées : les bords droits (ancrage) se font face, chaque ligne est centrée. */
+  function layoutLines(preps, setts, opt) {
+    var items = [], Wmax = 0, i, wp;
+    for (i = 0; i < preps.length; i++) {
+      if (!preps[i].any) continue;
+      wp = warp(preps[i], setts[i]);
+      if (!(wp.box.w > 0) || !(wp.box.h > 0)) continue;
+      items.push(wp);
+      if (wp.box.w > Wmax) Wmax = wp.box.w;
+    }
+    if (!items.length) return null;
+    var gapAbs = (opt.gap || 0) / 100 * CAPU, y = 0, totalW = 0, polys = [];
+    items.forEach(function (it) {
+      it.k = opt.justify ? Wmax / it.box.w : 1;
+      totalW = Math.max(totalW, it.box.w * it.k);
+    });
+    items.forEach(function (it) {
+      var b = it.box, k = it.k, cx = b.x + b.w / 2;
+      it.polys.forEach(function (poly) {
+        polys.push(poly.map(function (p) { return [(p[0] - cx) * k + totalW / 2, (p[1] - b.y) * k + y]; }));
+      });
+      y += b.h * k + gapAbs;
+    });
+    return { polys: polys, box: { x: 0, y: 0, w: totalW, h: Math.max(y - gapAbs, 1) } };
+  }
+
+  /* preps : une préparation par ligne, setts : un réglage par ligne.
+     opt : { fg, bg (ou null), preview, gap (% de la hauteur de capitale), justify } */
+  function buildSVG(preps, setts, opt) {
+    var lay = layoutLines(preps, setts, opt);
+    if (!lay) return null;
+    var b = lay.box;
     var pad = opt.bg ? Math.max(b.w, b.h) * 0.1 : 0;
     var W = b.w + pad * 2, H = b.h + pad * 2;
     var rw = Math.round(W * 10) / 10, rh = Math.round(H * 10) / 10, size = "";
@@ -344,7 +383,7 @@
     }
     var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + rw + " " + rh + '"' + size + ' preserveAspectRatio="xMidYMid meet">';
     if (opt.bg) svg += '<rect width="' + rw + '" height="' + rh + '" fill="' + opt.bg + '"/>';
-    svg += '<path fill="' + opt.fg + '" d="' + pathData(wp.polys, b.x - pad, b.y - pad) + '"/></svg>';
+    svg += '<path fill="' + opt.fg + '" d="' + pathData(lay.polys, b.x - pad, b.y - pad) + '"/></svg>';
     return { svg: svg, w: rw, h: rh };
   }
 
@@ -383,8 +422,32 @@
     text: "Fuyant", font: "momo-trust-display", upper: true, spacing: 2,
     hProf: "right", hAnchor: "top", hAmt: 45,
     vProf: "none", vAmt: 30,
-    fg: "#1c5cff", bg: "#f5f5f5", withBg: true
+    fg: "#1c5cff", bg: "#f5f5f5", withBg: true,
+    mirror: true, sel: 0, ls: [], gap: 12, justify: false, autoDone: false
   };
+  var lines = ["Fuyant"];
+
+  /* ---------- réglages par ligne : state = ligne 1, state.ls[i] = lignes suivantes (si miroir désactivé) ---------- */
+  var SK = ["hProf", "hAnchor", "hAmt", "vProf", "vAmt"];
+  function mirrorOf(s) {
+    var o = {}; SK.forEach(function (k) { o[k] = s[k]; });
+    o.hAnchor = s.hAnchor === "top" ? "bottom" : s.hAnchor === "bottom" ? "top" : s.hAnchor;
+    o.vProf = s.vProf === "bottom" ? "top" : s.vProf === "top" ? "bottom" : s.vProf;
+    return o;
+  }
+  function lineSet(i) {
+    if (i === 0) return state;
+    if (state.mirror) return i % 2 ? mirrorOf(state) : state;
+    for (var j = 1; j <= i; j++) if (!state.ls[j]) state.ls[j] = mirrorOf(lineSet(j - 1));
+    return state.ls[i];
+  }
+  function cur() {
+    if (state.mirror || lines.length < 2 || state.sel === 0) return state;
+    return lineSet(Math.min(state.sel, lines.length - 1));
+  }
+  function getLines() {
+    return state.text.split(/\r?\n/).map(function (s) { return s.replace(/^\s+|\s+$/g, ""); }).filter(Boolean).slice(0, 5);
+  }
 
   var $ = function (id) { return document.getElementById(id); };
   var canvas = $("canvas"), meta = $("meta"), stage = $("stage"), statusEl = $("status"), codeEl = $("code");
@@ -456,21 +519,23 @@
   function buildControls() {
     H_PROFS.forEach(function (p) {
       hBtns.push(makeBtn($("hProfs"), "opt", p.n, "", function () {
-        state.hProf = p.id;
-        if (p.id === "right" || p.id === "left") { state.hAnchor = "top"; state.hAmt = 45; }
-        if (p.id === "lens" || p.id === "hour") { state.hAnchor = "mid"; state.hAmt = 110; }
+        var S = cur();
+        S.hProf = p.id;
+        if (p.id === "right" || p.id === "left") { S.hAnchor = "top"; S.hAmt = 45; }
+        if (p.id === "lens" || p.id === "hour") { S.hAnchor = "mid"; S.hAmt = 110; }
         render();
       }));
     });
     ANCHORS.forEach(function (a) {
-      var b = makeBtn($("hAnchors"), "opt seg", a.n, a.n, function () { state.hAnchor = a.id; render(); });
+      var b = makeBtn($("hAnchors"), "opt seg", a.n, a.n, function () { cur().hAnchor = a.id; render(); });
       aBtns.push(b);
     });
     V_PROFS.forEach(function (p) {
       vBtns.push(makeBtn($("vProfs"), "opt", p.n, "", function () {
-        state.vProf = p.id;
-        if (p.id === "bottom" || p.id === "top") state.vAmt = 35;
-        if (p.id === "lens" || p.id === "hour") state.vAmt = 12;
+        var S = cur();
+        S.vProf = p.id;
+        if (p.id === "bottom" || p.id === "top") S.vAmt = 35;
+        if (p.id === "lens" || p.id === "hour") S.vAmt = 12;
         render();
       }));
     });
@@ -490,47 +555,72 @@
 
   function makeSVG(opt) {
     var font = getFont();
-    if (!font) return { error: window.opentype ? "Police illisible." : "Le moteur de police n’a pas pu se charger." };
-    var prep = prepare(font, state.text, { upper: state.upper, spacing: state.spacing / 100 });
-    var out = buildSVG(prep, state, opt);
-    return { out: out, prep: prep };
+    lines = getLines();
+    if (!font) return { error: window.opentype ? "Police illisible." : "Le moteur de police n’a pas pu se charger.", missing: 0 };
+    var missing = 0;
+    var preps = lines.map(function (l) {
+      var p = prepare(font, l, { upper: state.upper, spacing: state.spacing / 100 });
+      missing += p.missing; return p;
+    });
+    var setts = lines.map(function (l, i) { return lineSet(i); });
+    var out = buildSVG(preps, setts, { fg: opt.fg, bg: opt.bg, preview: opt.preview, gap: state.gap, justify: state.justify });
+    return { out: out, missing: missing };
   }
 
   function render() {
+    lines = getLines();
+    if (state.sel > lines.length - 1) state.sel = Math.max(0, lines.length - 1);
+    var S = cur(), multi = lines.length >= 2;
+    $("linesField").hidden = !multi;
+    $("lineTabs").hidden = !multi || state.mirror;
+    $("mirror").checked = state.mirror; $("justify").checked = state.justify;
+    $("gap").value = state.gap; $("gapOut").textContent = state.gap + " %";
+    if (multi && !state.mirror) {
+      var tabs = $("lineTabs");
+      if (tabs.children.length !== lines.length) {
+        tabs.innerHTML = "";
+        lines.forEach(function (l, i) {
+          makeBtn(tabs, "opt seg", "Ligne " + (i + 1) + " : " + l, String(i + 1), function () { state.sel = i; render(); });
+        });
+      }
+      Array.prototype.forEach.call(tabs.children, function (b, i) { b.setAttribute("aria-pressed", String(i === state.sel)); });
+    }
+    $("hLegend").textContent = "Inclinaison horizontale" + (multi ? (state.mirror ? " · ligne 1" : " · ligne " + (state.sel + 1)) : "");
+    $("vLegend").textContent = "Inclinaison verticale" + (multi ? (state.mirror ? " · ligne 1" : " · ligne " + (state.sel + 1)) : "");
     stage.style.setProperty("--stage-bg", state.bg);
     stage.style.setProperty("--stage-fg", state.fg);
     $("fg").value = state.fg; $("bg").value = state.bg;
     $("fgOut").textContent = state.fg.toUpperCase(); $("bgOut").textContent = state.bg.toUpperCase();
-    $("hAmt").value = state.hAmt; $("hAmtOut").textContent = state.hAmt + " %";
-    $("vAmt").value = state.vAmt; $("vAmtOut").textContent = state.vAmt + " %";
+    $("hAmt").value = S.hAmt; $("hAmtOut").textContent = S.hAmt + " %";
+    $("vAmt").value = S.vAmt; $("vAmtOut").textContent = S.vAmt + " %";
     $("spacing").value = state.spacing; $("spacingOut").textContent = (state.spacing / 100).toFixed(2) + " em";
     $("upper").checked = state.upper; $("withBg").checked = state.withBg;
     fontSel.value = state.font;
     $("removeFont").hidden = state.font.indexOf("custom:") !== 0;
 
     H_PROFS.forEach(function (p, i) {
-      hBtns[i].innerHTML = iconH(p.id, state.hAnchor);
-      hBtns[i].setAttribute("aria-pressed", String(state.hProf === p.id));
+      hBtns[i].innerHTML = iconH(p.id, S.hAnchor);
+      hBtns[i].setAttribute("aria-pressed", String(S.hProf === p.id));
     });
     V_PROFS.forEach(function (p, i) {
       vBtns[i].innerHTML = iconV(p.id);
-      vBtns[i].setAttribute("aria-pressed", String(state.vProf === p.id));
+      vBtns[i].setAttribute("aria-pressed", String(S.vProf === p.id));
     });
-    var noH = state.hProf === "none";
-    ANCHORS.forEach(function (a, i) { aBtns[i].setAttribute("aria-pressed", String(!noH && state.hAnchor === a.id)); aBtns[i].disabled = noH; });
-    $("hAmt").disabled = noH; $("vAmt").disabled = state.vProf === "none";
+    var noH = S.hProf === "none";
+    ANCHORS.forEach(function (a, i) { aBtns[i].setAttribute("aria-pressed", String(!noH && S.hAnchor === a.id)); aBtns[i].disabled = noH; });
+    $("hAmt").disabled = noH; $("vAmt").disabled = S.vProf === "none";
     PRESETS.forEach(function (p, i) { pBtns[i].setAttribute("aria-pressed", String(p.fg === state.fg && p.bg === state.bg)); });
 
     var r = makeSVG({ fg: state.fg, bg: null, preview: true });
     current = r.out || null;
     if (r.out) {
       canvas.innerHTML = r.out.svg;
-      var n = state.text.replace(/\s/g, "").length - r.prep.missing;
+      var n = lines.join("").replace(/\s/g, "").length - r.missing;
       meta.textContent = "viewBox 0 0 " + r.out.w + " " + r.out.h + "  ·  " + n + " lettre" + (n > 1 ? "s" : "") + "  ·  " + fontLabel() +
-        (r.prep.missing ? "  ·  " + r.prep.missing + " caractère(s) absent(s) de la police" : "");
+        (r.missing ? "  ·  " + r.missing + " caractère(s) absent(s) de la police" : "");
     } else {
       canvas.innerHTML = '<span class="empty"></span>';
-      canvas.firstChild.textContent = r.error || (r.prep && r.prep.missing ? "Aucun caractère de ce texte dans cette police" : "Saisissez un texte");
+      canvas.firstChild.textContent = r.error || (r.missing ? "Aucun caractère de ce texte dans cette police" : "Saisissez un texte");
       meta.textContent = "";
     }
     dlBtn.disabled = cpBtn.disabled = !r.out;
@@ -570,14 +660,14 @@
   function pick(a) { return a[Math.floor(Math.random() * a.length)]; }
   function rint(a, b) { return a + Math.floor(Math.random() * (b - a + 1)); }
   $("rnd").addEventListener("click", function () {
-    var hp = pick(["right", "left", "lens", "hour", "lens", "right"]);
-    state.hProf = hp;
-    state.hAnchor = (hp === "lens" || hp === "hour") ? pick(["mid", "mid", "top", "bottom"]) : pick(["top", "mid", "bottom"]);
-    state.hAmt = (hp === "lens" || hp === "hour") ? rint(60, 130) : rint(30, 70);
-    if (Math.random() < 0.55) { state.vProf = "none"; }
+    var S = cur(), hp = pick(["right", "left", "lens", "hour", "lens", "right"]);
+    S.hProf = hp;
+    S.hAnchor = (hp === "lens" || hp === "hour") ? pick(["mid", "mid", "top", "bottom"]) : pick(["top", "mid", "bottom"]);
+    S.hAmt = (hp === "lens" || hp === "hour") ? rint(60, 130) : rint(30, 70);
+    if (Math.random() < 0.55) { S.vProf = "none"; }
     else {
       var vp = pick(["bottom", "top", "lens", "hour"]);
-      state.vProf = vp; state.vAmt = (vp === "lens" || vp === "hour") ? rint(6, 16) : rint(20, 45);
+      S.vProf = vp; S.vAmt = (vp === "lens" || vp === "hour") ? rint(6, 16) : rint(20, 45);
     }
     state.spacing = Math.random() < 0.5 ? rint(0, 8) : rint(10, 60);
     var p; do { p = pick(PRESETS); } while (p.fg === state.fg && p.bg === state.bg);
@@ -585,12 +675,29 @@
     render();
   });
   $("swap").addEventListener("click", function () { var t = state.fg; state.fg = state.bg; state.bg = t; render(); });
-  $("text").addEventListener("input", function (e) { state.text = e.target.value; render(); });
+  $("text").addEventListener("input", function (e) {
+    var before = lines.length;
+    state.text = e.target.value;
+    var after = getLines().length;
+    if (before < 2 && after >= 2 && !state.autoDone && state.mirror) {
+      state.autoDone = true;
+      state.hProf = "lens"; state.hAnchor = "bottom"; state.hAmt = 110; state.vProf = "none";
+      render();
+      say("Ligne 1 : bas droit, pic en haut. Ligne 2 : en miroir, haut droit, pic en bas. Réglable ci-dessous.");
+      return;
+    }
+    render();
+  });
+  $("mirror").addEventListener("change", function (e) {
+    state.mirror = e.target.checked; state.ls = []; state.sel = 0; render();
+  });
+  $("gap").addEventListener("input", function (e) { state.gap = +e.target.value; render(); });
+  $("justify").addEventListener("change", function (e) { state.justify = e.target.checked; render(); });
   $("upper").addEventListener("change", function (e) { state.upper = e.target.checked; render(); });
   $("withBg").addEventListener("change", function (e) { state.withBg = e.target.checked; });
   $("spacing").addEventListener("input", function (e) { state.spacing = +e.target.value; render(); });
-  $("hAmt").addEventListener("input", function (e) { state.hAmt = +e.target.value; render(); });
-  $("vAmt").addEventListener("input", function (e) { state.vAmt = +e.target.value; render(); });
+  $("hAmt").addEventListener("input", function (e) { cur().hAmt = +e.target.value; render(); });
+  $("vAmt").addEventListener("input", function (e) { cur().vAmt = +e.target.value; render(); });
   $("fg").addEventListener("input", function (e) { state.fg = e.target.value; render(); });
   $("bg").addEventListener("input", function (e) { state.bg = e.target.value; render(); });
   fontSel.addEventListener("change", function (e) { state.font = e.target.value; render(); });
@@ -663,7 +770,7 @@
   (function () {
     var f = getFont(); if (!f) return;
     var prep = prepare(f, "Penché", { upper: true, spacing: 0.02 });
-    var lg = buildSVG(prep, { hProf: "lens", hAnchor: "mid", hAmt: 90, vProf: "none", vAmt: 0 }, { fg: "#f5f5f5", bg: null, preview: true });
+    var lg = buildSVG([prep], [{ hProf: "lens", hAnchor: "mid", hAmt: 90, vProf: "none", vAmt: 0 }], { fg: "#f5f5f5", bg: null, preview: true, gap: 0, justify: false });
     if (lg) $("logo").innerHTML = lg.svg;
   })();
 
